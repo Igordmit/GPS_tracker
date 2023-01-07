@@ -8,31 +8,60 @@ void setup() {
   Serial.begin(9600);
   Serial1.begin(9600);
 
-  Serial.println(TinyGPS::library_version());
   newData = false;
   start = millis();
 }
 
 void loop() {
+ // easySerial();
 
-  if ((millis() - start > 5000) && (Serial1.available())) {
-    currentData = Serial1.read();
-    Serial.println(currentData);
-    if (('\r' != currentData) && gps.encode(currentData)) {
-      Serial.println("debug");
-      newData = true;
-    }
+  mainFunction();
+}
 
-    if(newData){
-        gpsdump(gps);
-    }
-
-    start = millis();
+//Функция для проверки модуля через u-center
+void easySerial(){
+  if(Serial1.available()){
+    Serial.write(Serial1.read());
   }
 }
 
-void gpsdump(TinyGPS &gps){
+void mainFunction(){
+  if (millis() - start > 5000) {
+
+    newData = readgps();
+    if (newData) {
+      start = millis();
+      gpsdump(gps);
+    }
+  }  
+}
+
+bool readgps() {
+  while (Serial1.available()) {
+    int b = Serial1.read();
+    if ('\r' != b) {
+      if (gps.encode(b))
+        return true;
+    }
+  }
+  return false;
+}
+
+void gpsdump(TinyGPS &gps) {
   long lat, lon;
+  String lats, lons;
   gps.get_position(&lat, &lon);
-  Serial.print(lat); Serial.print(", "); Serial.print(lon); 
+  
+  lats = convertCoordinates(lat);
+  lons = convertCoordinates(lon);
+}
+
+String convertCoordinates(long coordinates){
+
+  String tempCoords = String(coordinates);
+  String degrees = tempCoords.substring(0, tempCoords.length() - 6);
+  String part = String("0." + tempCoords.substring(tempCoords.length() - 6));
+  part = String((part.toDouble())*60);
+  return degrees + part;
+
 }

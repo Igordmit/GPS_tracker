@@ -48,20 +48,18 @@ bool readgps() {
 }
 
 void gpsdump(TinyGPS &gps) {
-  long lat, lon;
+  float lat, lon;
   String lats, lons;
-  gps.get_position(&lat, &lon);
-  
+  gps.f_get_position(&lat, &lon);
+ 
   lats = convertCoordinates(lat);
   lons = convertCoordinates(lon);
 }
 
-String convertCoordinates(long coordinates){
+String convertCoordinates(float coordinates){
 
-  String tempCoords = String(coordinates);
-  String degrees = tempCoords.substring(0, tempCoords.length() - 6);
-  String part = String("0." + tempCoords.substring(tempCoords.length() - 6));
-  part = String((part.toDouble())*60);
-  return degrees + part;
+  float temp = (coordinates - int(coordinates)) * 60;
+  String result = String(int(coordinates)) + String(temp);
+  return result;
 
 }

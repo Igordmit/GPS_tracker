@@ -13,42 +13,164 @@
 #define PASSWORD_SETTING_POSITION 38
 #define PASSWORD_SETTING_MAX_LENGTH 10
 
+#define REG_NETWORK 0
+#define LOGGED 1
+#define WAIT_ANSWER 2
+#define WAIT_CREG 3
+#define GPRS_INIT 4
+#define CONNECTED_SERVER 5
+#define WAIT_GPRS_INIT 6
+#define WAIT_STEP 7
+
 TinyGPS gps;
 bool newData;
 unsigned long start;
 int currentData;
-char target[] = "hello";
 String dates, times, lats, lons, speed, sats, course, height = "0";
 String password = "";
 String server = "";
 String port = "";
 String id = "";
 bool serialWork = false;
-bool logged = false;
-bool waitAnswer = false;
-String waitedAnswer = "";
+int GPRSinitStep = 0;
+//----Для GSM-----
+long timerCommand;
+bool flags[10];
 
 void setup() {
   Serial.begin(9600);
   Serial1.begin(9600);
   Serial2.begin(9600);
-  Serial.setTimeout(50);
+  Serial.setTimeout(500);
   newData = false;
   start = millis();
   password = getPassword();
   server = getServer();
   port = getPort();
   id = getId();
+  delay(1000);
+  sendATGSM("AT");
+  delay(100);
+  sendATGSM("AT+CREG?");
+  timerCommand = millis();
+
+  flags[WAIT_CREG] = true;
+  flags[REG_NETWORK] = false;
+  flags[GPRS_INIT] = false;
+  flags[CONNECTED_SERVER] = false;
+  flags[REG_NETWORK] = false;
+  flags[LOGGED] = false;
 }
 
 void loop() {
-  getCommand();
-  if(serialWork){
-    easySerial();
-  } else {
-    mainFunction();
+   getCommand();
+  // if(serialWork){
+  //   easySerial();
+  // } else {
+  //   mainFunction();
+  // }
+
+  if((millis() - timerCommand > 10000) && (!flags[WAIT_CREG]) && (!flags[REG_NETWORK])){
+    sendATGSM("AT+CREG?");
+    timerCommand = millis();
+    flags[WAIT_CREG] = true;
   }
+
+  if((millis() - timerCommand > 5000) && (flags[WAIT_CREG]) && (!flags[REG_NETWORK])){
+    flags[WAIT_CREG]= false;
+  }
+
+  if((flags[REG_NETWORK]) && (!flags[GPRS_INIT]) && (GPRSinitStep == 0) && (!flags[WAIT_STEP])){
+    //sendATGSM("AT+CSTT=\"internet\"");
+    sendATGSM("AT+SAPBR=3,1,\"APN\",\"internet\"");
+    timerCommand = millis();
+    flags[WAIT_STEP] = true;
+  }
+
+  if((flags[REG_NETWORK]) && (!flags[GPRS_INIT]) && (GPRSinitStep == 1) && (!flags[WAIT_STEP])){
+    //sendATGSM("AT+CIICR");
+    sendATGSM("AT+SAPBR=1,1");
+    timerCommand = millis();
+    flags[WAIT_STEP] = true;
+  }
+
+  if((flags[REG_NETWORK]) && (!flags[GPRS_INIT]) && (GPRSinitStep == 2) && (!flags[WAIT_STEP])){
+    //sendATGSM("AT+CIFSR");
+    sendATGSM("AT+SAPBR=2,1");
+    timerCommand = millis();
+    flags[WAIT_STEP] = true;
+  }
+
+  if((flags[REG_NETWORK]) && (!flags[GPRS_INIT]) && (GPRSinitStep == 3) && (!flags[WAIT_STEP])){
+    sendATGSM("AT+CIPSTART=\"TCP\",\""+server+"\","+port+"");
+    timerCommand = millis();
+    flags[WAIT_STEP] = true;
+    
+  }
+
+  if((millis() - timerCommand > 2000) && (flags[WAIT_STEP]) && (!flags[GPRS_INIT])){
+    flags[WAIT_STEP]= false;
+  }
+
+   if(flags[GPRS_INIT] && flags[CONNECTED_SERVER] && !flags[LOGGED]){
+     sendData(loginPacket());
+     timerCommand = millis();
+  }
+
+  getDataFromGSM();
   
+}
+
+void getDataFromGSM(){
+  String fromGSM = "";
+  if(Serial2.available()) {
+    fromGSM = Serial2.readString();
+    Serial.println(fromGSM);
+
+    if(flags[WAIT_CREG] && fromGSM.indexOf("CREG") != -1){
+      flags[REG_NETWORK] = checkCREG(fromGSM);
+      if(!flags[REG_NETWORK]) flags[GPRS_INIT] = false;
+      timerCommand = millis();
+      flags[WAIT_CREG] = false;
+    }
+    else if(flags[WAIT_STEP] && GPRSinitStep != 3 && GPRSinitStep != 2){
+      if(fromGSM.indexOf("OK") != -1){
+        Serial.println("true");
+        GPRSinitStep++;
+        timerCommand = millis();
+        flags[WAIT_STEP]= false;
+      }
+    }
+
+    else if(flags[WAIT_STEP] && GPRSinitStep == 2){
+      if(fromGSM.indexOf(".") != -1){
+        GPRSinitStep++;
+        timerCommand = millis();
+        flags[WAIT_STEP]= false;
+      }
+    }
+
+    else if(flags[WAIT_STEP] && GPRSinitStep == 3){
+      if(fromGSM.indexOf("OK") != -1){
+        flags[GPRS_INIT] = true;
+        timerCommand = millis();
+        flags[WAIT_STEP]= false;
+        flags[CONNECTED_SERVER] = true;
+        
+      }
+    }
+
+  }
+
+}
+
+bool checkCREG(String fromGSM){
+  int simbolPos;
+  simbolPos = fromGSM.indexOf(',');
+  if (fromGSM.substring(simbolPos+1, simbolPos+2) == "1"){
+    return true;
+  }
+  return false;
 }
 
 void easySerial(){
@@ -118,7 +240,7 @@ String shortPacket(){
 }
 
 String loginPacket(){
-  String packet = "#L#"+id+";"+password+(char)13+(char)10;
+  return "#L#"+id+";"+password+(char)13+(char)10;
 }
 
 String pingPacket(){
@@ -141,8 +263,8 @@ void  getCommand(){
     }
 
      else if(fromPort.indexOf("AT+PORT=") != -1){
-      setServer(fromPort.substring(8, fromPort.length()));
-      server = getServer();
+      setPort(fromPort.substring(8, fromPort.length()));
+      port = getPort();
     }
 
     else if(fromPort.indexOf("AT+ID=") != -1){
@@ -159,7 +281,7 @@ void  getCommand(){
     }
     
     else{
-      Serial1.println(fromPort);
+      Serial2.println(fromPort);
     }
   }
   
@@ -171,6 +293,34 @@ void setSetting(String newSetting, int seek, int countSymbols){
     EEPROM.write(i + seek, newSetting[i]);
   }
   EEPROM.write(i + seek, (char)10);
+}
+
+String getPassword(){
+  return getSetting(PASSWORD_SETTING_POSITION, PASSWORD_SETTING_MAX_LENGTH);
+}
+
+void setServer(String serverPort){
+  setSetting(serverPort, SERVER_SETTING_POSITION, SERVER_SETTING_MAX_LENGTH);
+}
+
+String getServer(){
+  return getSetting(SERVER_SETTING_POSITION, SERVER_SETTING_MAX_LENGTH);
+}
+
+void setPort(String port){
+  setSetting(port, PORT_SETTING_POSITION, PORT_SETTING_MAX_LENGTH);
+}
+
+String getPort(){
+  return getSetting(PORT_SETTING_POSITION, PORT_SETTING_MAX_LENGTH);
+}
+
+void setId(String id){
+  setSetting(id, ID_SETTING_POSITION, ID_SETTING_MAX_LENGTH);
+}
+
+String getId(){
+  return getSetting(ID_SETTING_POSITION, ID_SETTING_MAX_LENGTH);
 }
 
 String getSetting(int seek, int countSymbols){
@@ -189,49 +339,6 @@ void setPassword(String newPassword){
   setSetting(newPassword, PASSWORD_SETTING_POSITION, PASSWORD_SETTING_MAX_LENGTH);
 }
 
-String getPassword(){
-  return getSetting(PASSWORD_SETTING_POSITION, PASSWORD_SETTING_MAX_LENGTH);
-}
-
-void setServer(String serverPort){
-  setSetting(serverPort, SERVER_SETTING_POSITION, SERVER_SETTING_MAX_LENGTH);
-}
-
-String getServer(){
-  return getSetting(SERVER_SETTING_POSITION, SERVER_SETTING_MAX_LENGTH);
-}
-
-void setPort(String port){
-  setSetting(id, PORT_SETTING_POSITION, PORT_SETTING_MAX_LENGTH);
-}
-
-String getPort(){
-  return getSetting(PORT_SETTING_POSITION, PORT_SETTING_MAX_LENGTH);
-}
-
-void setId(String id){
-  setSetting(id, ID_SETTING_POSITION, ID_SETTING_MAX_LENGTH);
-}
-
-String getId(){
-  return getSetting(ID_SETTING_POSITION, ID_SETTING_MAX_LENGTH);
-}
-
-void initializeGSM(){
-  sendATGSM("AT");
-  delay(100);
-  sendATGSM("AT+CSTT=\"internet\"");
-  delay(100);
-  sendATGSM("AT+CIICR");  
-  delay(100);
-}
-
-void connectToServer(){
-  sendATGSM("AT+CIPSTART=\"TCP\",\""+server+"\","+port+"");
-  waitAnswer = true;
-  waitedAnswer = "CONNECT OK";
-}
-
 void sendATGSM(String command){
   Serial2.println(command);
 }
@@ -242,6 +349,12 @@ void sendData(String package){
   sendATGSM(package);
   delay(100);
   Serial2.println((char)26); 
-  delay(100);
-  Serial2.println();
+  //delay(100);
+  //Serial2.println();
+}
+
+
+
+void debugPring(String str){
+  Serial.println("[bebug]->" + str);
 }
